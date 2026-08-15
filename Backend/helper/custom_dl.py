@@ -29,9 +29,10 @@ class ByteStreamer:
     CLEAN_INTERVAL = 30 * 60
     _instances: Dict[int, "ByteStreamer"] = {}
 
-    def __init__(self, client: Client, client_index: int = -1):
+    def __init__(self, client: Client, client_index: int = -1, *, log_stats: bool = True):
         self.client = client
         self.client_index = client_index
+        self.log_stats = log_stats
         self._file_id_cache: Dict[Tuple[int, int], FileId] = {}
         self._session_lock = asyncio.Lock()
         if client_index >= 0:
@@ -432,7 +433,8 @@ class ByteStreamer:
                         client_avg_mbps[client_index] = 0.5 * prev + 0.5 * avg_mbps
                     
                     entry["chunk_size"] = chunk_size
-                    asyncio.create_task(db.log_stream_stats(entry))
+                    if self.log_stats:
+                        asyncio.create_task(db.log_stream_stats(entry))
 
                     async def delayed_pop():
                         await asyncio.sleep(3)

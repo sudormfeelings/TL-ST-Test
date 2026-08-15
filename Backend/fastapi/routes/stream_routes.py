@@ -5,7 +5,7 @@ import secrets
 import time
 from collections import deque
 from typing import Dict
-from urllib.parse import quote, unquote
+from urllib.parse import unquote
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -17,6 +17,8 @@ from Backend.fastapi.security.tokens import verify_token
 from Backend.helper.analytics import client_ip_from, record_stream_start
 from Backend.helper.custom_dl import ACTIVE_STREAMS, RECENT_STREAMS, ByteStreamer
 from Backend.helper.encrypt import decode_string
+from Backend.helper.http_range import build_stream_headers as _build_stream_headers
+from Backend.helper.http_range import parse_range_header
 from Backend.helper.utils import track_usage
 from Backend.helper.virtual_dl import resolve_virtual_parts, virtual_stream_generator
 from Backend.helper.zip_stream import resolve_zip_entry
@@ -52,34 +54,6 @@ def make_json_safe(obj):
     if isinstance(obj, list):
         return [make_json_safe(v) for v in obj]
     return obj
-
-
-#----- Parse an HTTP Range header into (start, end) bounds
-def parse_range_header(range_header: str, file_size: int):
-    if not range_header:
-        return 0, file_size - 1
-    try:
-        value = range_header.replace("bytes=", "").strip()
-        start_str, end_str = value.split("-")
-        if start_str == "":
-            length = int(end_str)
-            start = file_size - length
-            end = file_size - 1
-        elif end_str == "":
-            start = int(start_str)
-            end = file_size - 1
-        else:
-            start = int(start_str)
-            end = int(end_str)
-    except Exception:
-        raise HTTPException(status_code=416, detail="Invalid Range header", headers={"Content-Range": f"bytes */{file_size}"})
-    if start < 0:
-        start = 0
-    if end >= file_size:
-        end = file_size - 1
-    if end < start:
-        raise HTTPException(status_code=416, detail="Requested Range Not Satisfiable", headers={"Content-Range": f"bytes */{file_size}"})
-    return start, end
 
 
 #----- Pick the least-loaded client, preferring the target DC, round-robin on ties
@@ -146,29 +120,6 @@ def _resolve_filename_mime(file_id):
     if "." not in file_name and "/" in mime_type:
         file_name = f"{file_name}.{mime_type.split('/')[1]}"
     return file_name, mime_type
-
-
-def _content_disposition(file_name, disposition="inline"):
-    ascii_fallback = file_name.encode("ascii", "ignore").decode("ascii").replace('"', "").strip() or "file"
-    return f"{disposition}; filename=\"{ascii_fallback}\"; filename*=UTF-8''{quote(file_name, safe='')}"
-
-
-#----- Build the shared streaming response headers and status code
-def _build_stream_headers(mime_type, file_name, req_length, range_header, start, end, file_size):
-    headers = {
-        "Content-Type": mime_type,
-        "Content-Disposition": _content_disposition(file_name),
-        "Accept-Ranges": "bytes",
-        "Content-Length": str(req_length),
-        "Cache-Control": "public, max-age=3600",
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges",
-    }
-    status = 200
-    if range_header:
-        headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
-        status = 206
-    return headers, status
 
 
 _thumb_cache: Dict[str, tuple] = {}

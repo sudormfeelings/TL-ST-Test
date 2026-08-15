@@ -35,15 +35,14 @@ class Database:
         self.db_uris = Telegram.DATABASE
         self.db_name = db_name
 
-        if len(self.db_uris) < 2:
-            raise ValueError("At least 2 database URIs are required (1 for tracking + 1 for storage).")
-
         self.clients: Dict[str, motor.motor_asyncio.AsyncIOMotorClient] = {}
         self.dbs: Dict[str, motor.motor_asyncio.AsyncIOMotorDatabase] = {}
 
         self.current_db_index = 1
 
     async def connect(self):
+        if len(self.db_uris) < 2:
+            raise ValueError("At least 2 database URIs are required (1 for tracking + 1 for storage).")
         try:
             for index, uri in enumerate(self.db_uris):
                 client = motor.motor_asyncio.AsyncIOMotorClient(uri)
