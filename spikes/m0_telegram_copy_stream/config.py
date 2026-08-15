@@ -81,8 +81,8 @@ class M0Config:
         if retry_delay < 0 or retry_delay > 60:
             raise ConfigError("M0_RETRY_MAX_DELAY_SECONDS must be between 0 and 60")
         host = (os.getenv("M0_HOST") or "127.0.0.1").strip()
-        if host not in {"127.0.0.1", "localhost", "::1"}:
-            raise ConfigError("Milestone 0 must bind to a loopback host")
+        if host != "127.0.0.1":
+            raise ConfigError("Milestone 0 must bind to 127.0.0.1")
 
         return cls(
             bot_token=_required("M0_BOT_TOKEN") if require_copy else (os.getenv("M0_BOT_TOKEN") or "").strip(),

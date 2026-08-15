@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from Backend.helper.custom_dl import ByteStreamer
@@ -19,6 +20,7 @@ from .models import PlaybackManifest
 
 LOGGER = logging.getLogger("m0.stream")
 M0_VIEWER_CLIENT_INDEX = -1000
+M0_STREMIO_TEST_ID = "tt1254207"
 
 
 @dataclass
@@ -49,6 +51,12 @@ async def _resolve_destination_parts(state: StreamState):
 
 def create_app(state: StreamState, *, port: int) -> FastAPI:
     app = FastAPI(title="M0 Telegram Copy/Stream Spike", docs_url=None, redoc_url=None)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["GET", "HEAD"],
+        allow_headers=["*"],
+    )
 
     @app.api_route("/m0/stream", methods=["GET", "HEAD"])
     async def m0_stream(request: Request):
@@ -103,21 +111,29 @@ def create_app(state: StreamState, *, port: int) -> FastAPI:
             "version": "0.0.1",
             "name": "M0 Telegram Copy Spike",
             "description": "Disposable developer-only destination streaming proof",
-            "resources": ["stream"],
+            "resources": [{
+                "name": "stream",
+                "types": ["movie"],
+                "idPrefixes": [M0_STREMIO_TEST_ID],
+            }],
             "types": ["movie"],
-            "idPrefixes": ["m0:"],
+            "idPrefixes": [M0_STREMIO_TEST_ID],
             "catalogs": [],
         })
 
     @app.get("/m0/stremio/stream/{media_type}/{media_id}.json")
     async def stremio_stream(media_type: str, media_id: str):
-        if media_type != "movie" or media_id != "m0:test":
+        if media_type != "movie" or media_id != M0_STREMIO_TEST_ID:
             return {"streams": []}
         return {
             "streams": [{
-                "name": "M0 destination copy",
-                "title": state.playback.logical_name,
+                "name": "M0 Destination Cache",
+                "description": f"Developer-only destination playback: {state.playback.logical_name}",
                 "url": f"http://127.0.0.1:{port}/m0/stream",
+                "behaviorHints": {
+                    "notWebReady": True,
+                    "filename": state.playback.logical_name,
+                },
             }]
         }
 

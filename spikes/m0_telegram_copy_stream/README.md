@@ -65,7 +65,7 @@ Optional values:
 | `M0_DESTINATION_MANIFEST` | `spikes/m0_telegram_copy_stream/destination_manifest.json` | Local copy result. |
 | `M0_COPY_ATTEMPTS` | `3` | Bounded attempts per Telegram lookup/copy operation. |
 | `M0_RETRY_MAX_DELAY_SECONDS` | `10` | Maximum delay between transient retries. |
-| `M0_HOST` | `127.0.0.1` | Loopback bind address; non-loopback values are rejected. |
+| `M0_HOST` | `127.0.0.1` | M0 bind address; every other value is rejected. |
 | `M0_PORT` | `8780` | Local server port. |
 
 Credentials are never logged. Never share the spike `.env`, session string, API hash, login code, or 2FA password. The spike `.gitignore` excludes `.env`, local session files, and the generated destination manifest.
@@ -209,14 +209,35 @@ vlc http://127.0.0.1:8780/m0/stream
 
 Seek to roughly 25%, 50%, and 80%. Each seek should produce a new Range request and resume without downloading all preceding bytes.
 
-The temporary Stremio proof endpoints are:
+## Hardcoded Stremio proof
+
+Keep the M0 server running from the repository root:
+
+```powershell
+.\.venv\Scripts\python.exe -m spikes.m0_telegram_copy_stream.run serve
+```
+
+The command binds only to `127.0.0.1`. Confirm the developer manifest opens in a browser:
 
 ```text
 http://127.0.0.1:8780/m0/stremio/manifest.json
-http://127.0.0.1:8780/m0/stremio/stream/movie/m0:test.json
 ```
 
-They expose one hardcoded stream response and no catalog or metadata provider. If the installed Stremio build supports opening a direct network URL, open `http://127.0.0.1:8780/m0/stream`; otherwise inspect/install the developer manifest and invoke the hardcoded `m0:test` stream through the local addon-development tooling. This endpoint is only a transport proof, not a usable addon.
+In Stremio Desktop for Windows:
+
+1. Open **Add-ons** using the puzzle icon.
+2. Choose **+ Add Addon**, paste `http://127.0.0.1:8780/m0/stremio/manifest.json`, and install **M0 Telegram Copy Spike**. If the dialog requires a Stremio link, use `stremio://127.0.0.1:8780/m0/stremio/manifest.json` instead.
+3. Search for **Big Buck Bunny** and open the movie whose IMDb ID is `tt1254207`. To navigate to that exact ID directly, press **Win+R**, enter `stremio:///detail/movie/tt1254207/tt1254207`, and allow Windows to open Stremio.
+4. Select the stream named **M0 Destination Cache**. Its description includes the logical filename from the destination manifest.
+5. Confirm playback starts, then seek to multiple positions.
+
+The Big Buck Bunny entry supplies only a navigable developer test ID through Stremio's existing Cinemeta metadata. The bytes still come from the already verified destination Cache messages and may not be the Big Buck Bunny film. The addon provides no metadata or catalog itself. Its hardcoded resource endpoint is:
+
+```text
+http://127.0.0.1:8780/m0/stremio/stream/movie/tt1254207.json
+```
+
+That resource returns exactly one URL: `http://127.0.0.1:8780/m0/stream`. Unknown IDs return an empty stream list. This is only a local transport proof, not a usable production addon.
 
 ## Manual acceptance checklist
 

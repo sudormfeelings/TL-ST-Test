@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from fastapi.testclient import TestClient
 
 from spikes.m0_telegram_copy_stream.models import PlaybackManifest, PlaybackPart
-from spikes.m0_telegram_copy_stream.routes import StreamState, create_app
+from spikes.m0_telegram_copy_stream.routes import M0_STREMIO_TEST_ID, StreamState, create_app
 
 
 class FakeRouteStreamer:
@@ -83,6 +83,44 @@ class M0RouteTests(unittest.TestCase):
         missing = self.client.get("/m0/stream")
         self.assertEqual(missing.status_code, 424)
         self.assertIn("Destination playback part is unavailable", missing.json()["detail"])
+
+    def test_stremio_manifest_exposes_only_the_hardcoded_movie_stream(self):
+        response = self.client.get(
+            "/m0/stremio/manifest.json",
+            headers={"Origin": "https://app.strem.io"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        manifest = response.json()
+        self.assertEqual(manifest["id"], "org.telegram-stremio.m0-spike")
+        self.assertEqual(manifest["types"], ["movie"])
+        self.assertEqual(manifest["idPrefixes"], [M0_STREMIO_TEST_ID])
+        self.assertEqual(manifest["catalogs"], [])
+        self.assertEqual(
+            manifest["resources"],
+            [{
+                "name": "stream",
+                "types": ["movie"],
+                "idPrefixes": [M0_STREMIO_TEST_ID],
+            }],
+        )
+        self.assertEqual(response.headers["access-control-allow-origin"], "*")
+
+    def test_stremio_stream_resource_returns_local_destination_url(self):
+        response = self.client.get(f"/m0/stremio/stream/movie/{M0_STREMIO_TEST_ID}.json")
+
+        self.assertEqual(response.status_code, 200)
+        streams = response.json()["streams"]
+        self.assertEqual(len(streams), 1)
+        self.assertEqual(streams[0]["name"], "M0 Destination Cache")
+        self.assertEqual(streams[0]["url"], "http://127.0.0.1:8780/m0/stream")
+        self.assertEqual(streams[0]["behaviorHints"]["filename"], "movie.mkv")
+
+    def test_stremio_stream_resource_returns_empty_for_unknown_ids(self):
+        response = self.client.get("/m0/stremio/stream/movie/tt0000000.json")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"streams": []})
 
 
 if __name__ == "__main__":
