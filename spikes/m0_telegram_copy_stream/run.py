@@ -6,10 +6,11 @@ import json
 import logging
 from pathlib import Path
 
-from .config import M0Config
+from .config import M0Config, PACKAGE_DIR
 from .manifest_store import load_destination_manifest, load_source_manifest, save_destination_manifest
 from .routes import M0_VIEWER_CLIENT_INDEX, StreamState, create_app
 from .telegram_broker import CopyPartialFailure, TelegramBroker, verify_destination_manifest
+from .viewer_login import login_viewer_session
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -140,12 +141,14 @@ async def serve_command(config: M0Config) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Milestone 0 Telegram copy/stream feasibility spike")
     parser.add_argument("--env-file", type=Path, help="Optional environment file (defaults to the spike .env)")
-    parser.add_argument("command", choices=("copy", "verify", "serve"))
+    parser.add_argument("command", choices=("login", "copy", "verify", "serve"))
     return parser
 
 
 def main() -> int:
     args = build_parser().parse_args()
+    if args.command == "login":
+        return asyncio.run(login_viewer_session(args.env_file or PACKAGE_DIR / ".env"))
     config = M0Config.from_env(args.env_file, require_copy=args.command == "copy")
     commands = {"copy": copy_command, "verify": verify_command, "serve": serve_command}
     return asyncio.run(commands[args.command](config))

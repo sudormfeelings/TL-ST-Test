@@ -20,8 +20,14 @@ The central bot copies messages but never downloads or proxies video bytes. Play
 4. Create a central bot with BotFather. Add it as an administrator to both groups with permission to read and send/copy messages.
 5. Add the viewer Telegram user account to the destination group. Source-group membership is needed only if you want that user to inspect the source manually; the streamer does not use it.
 6. Obtain an API ID and API hash for the viewer account from `my.telegram.org`.
-7. Generate a PyroFork session string for that viewer account using the repository's existing session flow or another trusted local PyroFork session-string tool. Never publish or commit it.
-8. Copy `config.example.env` to `spikes/m0_telegram_copy_stream/.env` and fill in the values.
+7. Copy `config.example.env` to `spikes/m0_telegram_copy_stream/.env` and fill in `M0_VIEWER_API_ID` and `M0_VIEWER_API_HASH`. Leave `M0_VIEWER_SESSION` empty.
+8. From the repository root, authorize the viewer account locally:
+
+   ```powershell
+   .\.venv\Scripts\python.exe -m spikes.m0_telegram_copy_stream.run login
+   ```
+
+   Enter the viewer phone number, Telegram login code, and 2FA password (if requested) only in the local terminal. The command exports the authorized session directly into `M0_VIEWER_SESSION` in the spike `.env`, then verifies it with a fresh in-memory client. It never prints the session string.
 
 The numeric topic ID is the topic's `message_thread_id`, not the supergroup ID. The bot-copy command validates both the source topic and the destination Cache topic.
 
@@ -39,7 +45,7 @@ Required for `copy`:
 | `M0_DESTINATION_CACHE_TOPIC_ID` | Destination Cache topic `message_thread_id`. |
 | `M0_VIEWER_API_ID` | Telegram application API ID. Also used to initialize the bot client. |
 | `M0_VIEWER_API_HASH` | Telegram application API hash. |
-| `M0_VIEWER_SESSION` | Viewer user-session string. |
+| `M0_VIEWER_SESSION` | Viewer user-session string written automatically by `login`. Do not fill or share it manually. |
 
 Required for `verify` and `serve`:
 
@@ -62,7 +68,17 @@ Optional values:
 | `M0_HOST` | `127.0.0.1` | Loopback bind address; non-loopback values are rejected. |
 | `M0_PORT` | `8780` | Local server port. |
 
-Credentials are never logged. The spike `.gitignore` excludes `.env`, local session files, and the generated destination manifest.
+Credentials are never logged. Never share the spike `.env`, session string, API hash, login code, or 2FA password. The spike `.gitignore` excludes `.env`, local session files, and the generated destination manifest.
+
+## Initialize the viewer session
+
+With `M0_VIEWER_API_ID` and `M0_VIEWER_API_HASH` filled in, run:
+
+```powershell
+.\.venv\Scripts\python.exe -m spikes.m0_telegram_copy_stream.run login
+```
+
+PyroFork prompts locally for the viewer phone number, Telegram login code, and 2FA password when required. Login codes and passwords are entered without terminal echo. On success, the command writes `M0_VIEWER_SESSION` atomically, starts a fresh in-memory client from the stored value, calls `get_me()`, and disconnects. An existing session is preserved unless you explicitly answer `y` to the replacement prompt.
 
 ## Prepare test source
 
