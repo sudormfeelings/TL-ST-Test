@@ -74,6 +74,33 @@ Everything is managed from a friendly **web panel** — no coding, and almost no
 
 ---
 
+## M6B-A: TL-Core cache acquisition boundary
+
+M6B-A introduces the Stream-side control-plane client without changing media-byte playback. TL-Core remains the private authority for access, Source publication, Viewer storage topology, and Cache materialization. Stream remains the Viewer-local product that will use its own Telegram USER MTProto session and local HTTP Range server.
+
+Configure the local Stream installation with two separate Core values:
+
+```env
+TL_CORE_BASE_URL=https://core.example.com
+TL_CORE_CREDENTIAL=
+```
+
+`TL_CORE_CREDENTIAL` is the authenticated STREAM installation credential. It is sent only as a Bearer authorization header and must never be committed, logged, shared, or placed in a URL. It is not a Telegram credential. The Telegram API hash and Viewer user session remain a separate security domain and are never supplied by TL-Core.
+
+The Core client lazily calls `GET /api/v1/stream/bootstrap` and accepts only the authenticated Viewer's own semantic CACHE chat/thread topology with `storage_ready=true`. It does not derive topic meaning from names and does not scan Telegram topics. For a caller-supplied `source_id`, cache acquisition is bounded:
+
+1. `GET /api/v1/stream/cache/{source_id}`.
+2. Return a validated Viewer-owned locator immediately when it is `READY`.
+3. Only `CACHE_NOT_READY` may trigger `POST /api/v1/cache/materialize`.
+4. The logical POST attempt uses one cryptographically random `Idempotency-Key`; an uncertain transport retry reuses that same key.
+5. Require materialization status `READY`, fetch the locator once more, validate it, and stop.
+
+The immutable local locator contains only the Source ID, Viewer cache Replica ID, bootstrap Cache chat/thread, total size, and ordered destination Cache message parts. It rejects missing/duplicate parts, non-positive sizes, total-size mismatches, duplicate destination message IDs, unexpected schema, and any origin/uploader fields. No uploader chat, topic, or message coordinate is required or retained.
+
+M6B-A stops at this validated locator. A later M6B-B integration can translate it into the existing Viewer `ByteStreamer`/virtual multipart input. This milestone does not select Sources, change Stremio catalogs or metadata, scan Telegram, download media in Core, or alter local HTTP Range behavior.
+
+---
+
 ## 📱 Don't have a server? Use the TeleStremio Android app
 
 No VPS, no Docker, no MongoDB — **TeleStremio** runs this whole idea **on your phone**. It logs into your Telegram, hosts a local Stremio addon, and streams your channels on demand.

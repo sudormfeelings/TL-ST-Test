@@ -42,3 +42,9 @@ class Telegram:
     APPROVER_IDS                  = [int(x.strip()) for x in (getenv("APPROVER_IDS") or "").split(",") if x.strip().isdigit()]
     HTTP_PROXY_URL                = getenv("HTTP_Proxy_URL", "")
     SHOW_PROXY_AND_NON_PROXY_BOTH = getenv("SHOW_ProxyAndNonProxyBoth", "false").lower() == "true"
+
+
+#----- Stream installation's private TL-Core control-plane configuration
+class TLCore:
+    BASE_URL   = getenv("TL_CORE_BASE_URL", "").strip().rstrip("/")
+    CREDENTIAL = getenv("TL_CORE_CREDENTIAL", "").strip()
