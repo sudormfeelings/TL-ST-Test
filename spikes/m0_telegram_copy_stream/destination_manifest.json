@@ -1,0 +1,22 @@
+{
+  "logical_name": "Modern Family S03E06 Go Bullfrogs!  (1080p x265 10bit Joy).mkv",
+  "destination_topic_id": 2,
+  "complete": true,
+  "parts": [
+    {
+      "index": 0,
+      "destination_chat_id": -1003942371635,
+      "destination_message_id": 5
+    },
+    {
+      "index": 1,
+      "destination_chat_id": -1003942371635,
+      "destination_message_id": 6
+    },
+    {
+      "index": 2,
+      "destination_chat_id": -1003942371635,
+      "destination_message_id": 7
+    }
+  ]
+}
