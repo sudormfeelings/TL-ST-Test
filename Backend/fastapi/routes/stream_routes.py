@@ -6,6 +6,7 @@ import time
 from collections import deque
 from typing import Dict
 from urllib.parse import unquote
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -13,6 +14,8 @@ from fastapi.responses import Response as PlainResponse
 from fastapi.responses import StreamingResponse
 
 from Backend import db
+from Backend.core_client import CoreClientError, CoreErrorCode
+from Backend.core_playback import CorePlaybackNotConfigured, get_core_client, locator_to_virtual_media
 from Backend.fastapi.security.tokens import verify_token
 from Backend.helper.analytics import client_ip_from, record_stream_start
 from Backend.helper.custom_dl import ACTIVE_STREAMS, RECENT_STREAMS, ByteStreamer
@@ -254,6 +257,97 @@ async def stream_handler(request: Request, token: str, id: str, name: str, token
     )
 
 
+_CORE_NOT_FOUND = {
+    CoreErrorCode.SOURCE_NOT_FOUND,
+    CoreErrorCode.SOURCE_NOT_PUBLISHED,
+}
+_CORE_ACCESS_ERRORS = {
+    CoreErrorCode.INVALID_CREDENTIAL,
+    CoreErrorCode.INSTALLATION_REVOKED,
+    CoreErrorCode.ACCESS_REVOKED,
+    CoreErrorCode.CORE_SUSPENDED,
+    CoreErrorCode.STREAM_REQUIRED,
+    CoreErrorCode.STREAM_STORAGE_NOT_CONFIGURED,
+}
+
+
+#----- Destination-only Core Source playback through the Viewer USER session
+@router.get("/stream/core/{source_id}")
+@router.head("/stream/core/{source_id}")
+async def core_cache_stream_handler(request: Request, source_id: UUID):
+    try:
+        core_client = get_core_client()
+        locator = await core_client.ensure_cache(source_id)
+        descriptor = locator_to_virtual_media(locator)
+    except CorePlaybackNotConfigured:
+        raise HTTPException(status_code=503, detail="Core playback is not configured") from None
+    except CoreClientError as exc:
+        if exc.code in _CORE_NOT_FOUND:
+            raise HTTPException(status_code=404, detail="Core source is unavailable") from None
+        if exc.code in _CORE_ACCESS_ERRORS:
+            raise HTTPException(status_code=503, detail="Core playback access is unavailable") from None
+        raise HTTPException(status_code=503, detail="Core cache is temporarily unavailable") from None
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=503, detail="Core cache is temporarily unavailable") from None
+
+    streamer = _get_core_userbot_streamer()
+    if streamer is None:
+        raise HTTPException(status_code=503, detail="Viewer Telegram session is unavailable")
+
+    try:
+        parts, file_size = await resolve_virtual_parts(
+            descriptor.as_resolver_payload(),
+            streamer,
+            prefix_100=False,
+        )
+    except Exception:
+        raise HTTPException(status_code=503, detail="Viewer Cache media is unavailable") from None
+
+    expected_parts = descriptor.parts
+    if (
+        len(parts) != len(expected_parts)
+        or file_size != descriptor.total_size_bytes
+        or any(
+            resolved["chat_id"] != expected.chat_id
+            or resolved["msg_id"] != expected.msg_id
+            or resolved["size"] != expected.size_bytes
+            for resolved, expected in zip(parts, expected_parts)
+        )
+    ):
+        raise HTTPException(status_code=503, detail="Viewer Cache media is unavailable")
+
+    range_header = request.headers.get("Range", "")
+    start, end = parse_range_header(range_header, file_size)
+    requested_length = end - start + 1
+    file_name, mime_type = _resolve_filename_mime(parts[0]["file_id"])
+    headers, status = _build_stream_headers(
+        mime_type,
+        file_name,
+        requested_length,
+        range_header,
+        start,
+        end,
+        file_size,
+    )
+    if request.method == "HEAD":
+        return PlainResponse(status_code=status, headers=headers)
+
+    body = virtual_stream_generator(
+        parts=parts,
+        start=start,
+        end=end,
+        chunk_size=1024 * 1024,
+        streamer=streamer,
+        client_index=USERBOT_CLIENT_INDEX,
+        request=request,
+        meta={"title": file_name, "core_cache": True},
+        stream_id=secrets.token_hex(8),
+        parallelism=1,
+        prefetch_count=1,
+    )
+    return StreamingResponse(body, headers=headers, status_code=status, media_type=mime_type)
+
+
 #----- Stream a single Telegram file, with optional multi-client parallelism
 async def media_streamer(request: Request, chat_id: int, msg_id: int, token: str, token_data: dict = None, stream_id_hash: str = None):
     index = select_best_client(0)
@@ -374,6 +468,7 @@ async def virtual_media_streamer(request: Request, parts_payload: list, token: s
 
 
 _userbot_streamer: ByteStreamer = None
+_core_userbot_streamer: ByteStreamer = None
 
 
 #----- Lazily build and cache the ByteStreamer for the Userbot (None if unconfigured)
@@ -384,6 +479,21 @@ def _get_userbot_streamer() -> ByteStreamer:
     if _userbot_streamer is None or _userbot_streamer.client is not botmod.Userbot:
         _userbot_streamer = ByteStreamer(botmod.Userbot, USERBOT_CLIENT_INDEX)
     return _userbot_streamer
+
+
+#----- Core Cache uses the same Viewer USER client without publishing destination locators
+def _get_core_userbot_streamer() -> ByteStreamer:
+    global _core_userbot_streamer
+    if botmod.Userbot is None:
+        return None
+    if _core_userbot_streamer is None or _core_userbot_streamer.client is not botmod.Userbot:
+        _core_userbot_streamer = ByteStreamer(
+            botmod.Userbot,
+            USERBOT_CLIENT_INDEX,
+            log_stats=False,
+            expose_locator_metadata=False,
+        )
+    return _core_userbot_streamer
 
 
 #----- Stream a Global Search file through the Userbot session directly

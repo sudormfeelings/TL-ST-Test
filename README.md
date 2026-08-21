@@ -99,6 +99,51 @@ The immutable local locator contains only the Source ID, Viewer cache Replica ID
 
 M6B-A stops at this validated locator. A later M6B-B integration can translate it into the existing Viewer `ByteStreamer`/virtual multipart input. This milestone does not select Sources, change Stremio catalogs or metadata, scan Telegram, download media in Core, or alter local HTTP Range behavior.
 
+### M6B-B Core-backed Viewer Cache playback
+
+Production Stream now exposes an additive destination-only byte route:
+
+```text
+GET|HEAD /stream/core/{source_id}
+```
+
+The playback URL contains only the opaque Core Source UUID. It never embeds the Core credential, Telegram session/API hash, Viewer Cache chat/thread, Telegram message IDs, or uploader identity. Existing `/dl/{token}/{id}/{name}` playback remains unchanged and continues to serve legacy Mongo-indexed entries through its existing bot/Userbot selection.
+
+On each independent Core playback request, Stream calls `ensure_cache(source_id)` before sending media headers or bytes. A validated READY locator is translated into ordered virtual parts using one bootstrap-derived Viewer Cache chat ID and the destination message IDs returned by Core. The local Viewer Telegram USER MTProto session—not the Central Bot or bot pool—then resolves those exact Cache messages. The existing `resolve_virtual_parts()`, `virtual_stream_generator()`, HTTP Range parser, and response-header builder serve the virtual file without concatenating, predownloading, or writing it to disk.
+
+Core remains entirely outside the byte path:
+
+```text
+Stremio -> local Stream -> Core ensure_cache -> READY locator
+Stremio <- local HTTP Range <- Viewer USER MTProto <- Viewer CACHE messages
+```
+
+There is no fallback to uploader origin, another Viewer, Mongo Telegram coordinates, or bot streaming. If Core acquisition, Viewer USER configuration, destination lookup, or destination size validation fails, the Core route returns a sanitized unavailable response.
+
+M6B-B does not select Sources or add Core URLs to catalogs. Until a later Source-selection milestone generates these URLs, exercise a known disposable Source directly:
+
+```powershell
+# Terminal 1, from the Stream repository root (uses the existing configured DB,
+# bot, Viewer USER session, and TL_CORE_* environment):
+.\.venv\Scripts\python.exe -m Backend
+
+# Terminal 2, from the same repository root:
+$sourceId = "<disposable-source-uuid>"
+$url = "http://127.0.0.1:8000/stream/core/$sourceId"
+
+# Start/middle/end examples; choose offsets within the disposable fixture.
+curl.exe -v -H "Range: bytes=0-1048575" $url -o begin.bin
+curl.exe -v -H "Range: bytes=<middle-start>-<middle-end>" $url -o middle.bin
+curl.exe -v -H "Range: bytes=-1048576" $url -o end.bin
+
+# Choose a range whose start is in part N and end is in part N+1.
+curl.exe -v -H "Range: bytes=<cross-start>-<cross-end>" $url -o cross-part.bin
+
+vlc $url
+```
+
+For the real disposable smoke, first publish two or three disposable parts through UPLINK and ensure the local Stream installation has its own Core STREAM credential and Viewer Telegram USER session. Invoke the URL above, confirm Core materializes/returns the Viewer Cache, and verify beginning, middle, suffix, cross-part, VLC playback, and seeking. Confirm the URL contains only `source_id`. After Cache is READY, optionally delete only the disposable uploader-origin messages and repeat playback; it must continue from Viewer Cache. Do not delete meaningful media.
+
 ---
 
 ## 📱 Don't have a server? Use the TeleStremio Android app
