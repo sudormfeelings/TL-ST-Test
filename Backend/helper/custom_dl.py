@@ -29,9 +29,18 @@ class ByteStreamer:
     CLEAN_INTERVAL = 30 * 60
     _instances: Dict[int, "ByteStreamer"] = {}
 
-    def __init__(self, client: Client, client_index: int = -1):
+    def __init__(
+        self,
+        client: Client,
+        client_index: int = -1,
+        *,
+        log_stats: bool = True,
+        expose_locator_metadata: bool = True,
+    ):
         self.client = client
         self.client_index = client_index
+        self.log_stats = log_stats
+        self.expose_locator_metadata = expose_locator_metadata
         self._file_id_cache: Dict[Tuple[int, int], FileId] = {}
         self._session_lock = asyncio.Lock()
         if client_index >= 0:
@@ -79,7 +88,10 @@ class ByteStreamer:
         if cache_key not in self._file_id_cache:
             file_id = await get_file_ids(self.client, int(chat_id), int(message_id))
             if not file_id:
-                LOGGER.warning("Message %s not found in chat %s", message_id, chat_id)
+                if getattr(self, "expose_locator_metadata", True):
+                    LOGGER.warning("Message %s not found in chat %s", message_id, chat_id)
+                else:
+                    LOGGER.warning("Telegram media message is unavailable")
                 raise FileNotFound
             self._file_id_cache[cache_key] = file_id
         return self._file_id_cache[cache_key]
@@ -107,10 +119,11 @@ class ByteStreamer:
             stream_id = secrets.token_hex(8)
 
         now = time.time()
+        expose_locator_metadata = getattr(self, "expose_locator_metadata", True)
         registry_entry = {
             "stream_id": stream_id,
-            "msg_id": getattr(file_id, "local_id", None) or None,
-            "chat_id": getattr(file_id, "chat_id", None),
+            "msg_id": (getattr(file_id, "local_id", None) or None) if expose_locator_metadata else None,
+            "chat_id": getattr(file_id, "chat_id", None) if expose_locator_metadata else None,
             "dc_id": file_id.dc_id,
             "client_index": client_index,
             "start_ts": now,
@@ -148,7 +161,10 @@ class ByteStreamer:
                         loc_b[0] = await ByteStreamer._get_location(fresh)
                         return True
                 except Exception as exc:
-                    LOGGER.warning("Location refresh failed for chat=%s msg_id=%s: %s", chat_id, message_id, exc)
+                    if expose_locator_metadata:
+                        LOGGER.warning("Location refresh failed for chat=%s msg_id=%s: %s", chat_id, message_id, exc)
+                    else:
+                        LOGGER.warning("Telegram media location refresh failed: %s", type(exc).__name__)
                 return False
             return _refresh
 
@@ -432,7 +448,8 @@ class ByteStreamer:
                         client_avg_mbps[client_index] = 0.5 * prev + 0.5 * avg_mbps
                     
                     entry["chunk_size"] = chunk_size
-                    asyncio.create_task(db.log_stream_stats(entry))
+                    if self.log_stats:
+                        asyncio.create_task(db.log_stream_stats(entry))
 
                     async def delayed_pop():
                         await asyncio.sleep(3)

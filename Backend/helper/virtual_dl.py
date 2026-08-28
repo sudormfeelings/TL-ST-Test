@@ -1,4 +1,3 @@
-import math
 from typing import Dict, List, Optional, Tuple
 
 from fastapi import Request
@@ -67,7 +66,9 @@ async def virtual_stream_generator(
         offset = local_start - (local_start % chunk_size)
         first_part_cut = local_start - offset
         last_part_cut = (local_end % chunk_size) + 1
-        part_count = math.ceil(local_end / chunk_size) - math.floor(offset / chunk_size)
+        # `offset` is aligned above; ByteStreamer then requests fixed boundaries
+        # at offset + (sequence * chunk_size). Both range ends are inclusive.
+        part_count = (local_end // chunk_size) - (offset // chunk_size) + 1
 
         body_gen = await streamer.prefetch_stream(
             file_id=part["file_id"],

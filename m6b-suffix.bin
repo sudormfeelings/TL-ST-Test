@@ -1,0 +1,3 @@
+ction list parameter.
+The completion queue does not have enough free space, to post completions, for all entries being submitted.
+An attempt to register a process failed because the target host was not in a valid state to receive process registrations.

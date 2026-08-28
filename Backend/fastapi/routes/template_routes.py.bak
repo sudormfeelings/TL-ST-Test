@@ -1,4 +1,4 @@
-﻿import time
+import time
 
 from fastapi import Depends, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -35,11 +35,9 @@ def _base_context(request: Request) -> dict:
 async def admin_dashboard_page(request: Request, _: bool = Depends(require_auth)):
     ctx = _base_context(request)
     ctx["current_user"] = get_current_user(request)
-    return templates.TemplateResponse(
-        request=request,
-        name="admin_dashboard.html",
-        context=ctx,
-    )
+    return templates.TemplateResponse("admin_dashboard.html", ctx)
+
+
 #----- Login form (redirects to home when already authenticated)
 async def login_page(request: Request):
     if is_authenticated(request):
@@ -173,11 +171,9 @@ async def media_management_page(request: Request, media_type: str = "movie", cus
     ctx["current_user"] = get_current_user(request)
     ctx["media_type"] = media_type
     ctx["custom"] = custom
-    return templates.TemplateResponse(
-        request=request,
-        name="media_management.html",
-        context=ctx,
-    )
+    return templates.TemplateResponse("media_management.html", ctx)
+
+
 #----- Media edit page for a single title
 async def edit_media_page(request: Request, tmdb_id: int, db_index: int, media_type: str, _: bool = Depends(require_auth)):
     try:
@@ -197,11 +193,9 @@ async def edit_media_page(request: Request, tmdb_id: int, db_index: int, media_t
         "media_details": media_details,
         "api_token": api_tokens[0].get("token") if api_tokens else None,
     })
-    return templates.TemplateResponse(
-        request=request,
-        name="media_edit.html",
-        context=ctx,
-    )
+    return templates.TemplateResponse("media_edit.html", ctx)
+
+
 #----- Public status page (no auth)
 async def public_status_page(request: Request):
     try:
@@ -224,65 +218,51 @@ async def public_status_page(request: Request):
     ctx = _base_context(request)
     ctx["stats"] = public_stats
     ctx["is_authenticated"] = is_authenticated(request)
-    return templates.TemplateResponse(
-        request=request,
-        name="public_status.html",
-        context=ctx,
-    )
+    return templates.TemplateResponse("public_status.html", ctx)
+
+
 #----- Stremio setup guide (no auth)
 async def stremio_guide_page(request: Request):
     ctx = _base_context(request)
     ctx["is_authenticated"] = is_authenticated(request)
-    return templates.TemplateResponse(
-        request=request,
-        name="stremio_guide.html",
-        context=ctx,
-    )
+    return templates.TemplateResponse("stremio_guide.html", ctx)
+
+
 #----- Subscription management shell
 async def admin_subscriptions_page(request: Request, _: bool = Depends(require_auth)):
     ctx = _base_context(request)
     ctx["current_user"] = get_current_user(request)
-    return templates.TemplateResponse(
-        request=request,
-        name="subscriptions_manage.html",
-        context=ctx,
-    )
+    return templates.TemplateResponse("subscriptions_manage.html", ctx)
+
+
 #----- Access management shell
 async def admin_access_page(request: Request, _: bool = Depends(require_auth)):
     ctx = _base_context(request)
     ctx["current_user"] = get_current_user(request)
-    return templates.TemplateResponse(
-        request=request,
-        name="access_manage.html",
-        context=ctx,
-    )
+    return templates.TemplateResponse("access_manage.html", ctx)
+
+
 #----- Content requests shell (admin)
 async def admin_requests_page(request: Request, _: bool = Depends(require_auth)):
     ctx = _base_context(request)
     ctx["current_user"] = get_current_user(request)
-    return templates.TemplateResponse(
-        request=request,
-        name="requests_manage.html",
-        context=ctx,
-    )
+    return templates.TemplateResponse("requests_manage.html", ctx)
+
+
 #----- Public request page (no auth)
 async def public_request_page(request: Request):
     ctx = _base_context(request)
     ctx["is_authenticated"] = is_authenticated(request)
-    return templates.TemplateResponse(
-        request=request,
-        name="request_public.html",
-        context=ctx,
-    )
+    return templates.TemplateResponse("request_public.html", ctx)
+
+
 #----- Custom catalogs shell
 async def custom_catalogs_page(request: Request, _: bool = Depends(require_auth)):
     ctx = _base_context(request)
     ctx["current_user"] = get_current_user(request)
-    return templates.TemplateResponse(
-        request=request,
-        name="custom_catalogs.html",
-        context=ctx,
-    )
+    return templates.TemplateResponse("custom_catalogs.html", ctx)
+
+
 #----- Tools shell (WebUI replacement for scan/rescan/dbcheck commands)
 async def tools_page(request: Request, _: bool = Depends(require_auth)):
     ctx = _base_context(request)
@@ -290,11 +270,9 @@ async def tools_page(request: Request, _: bool = Depends(require_auth)):
     #----- Bot Admin Manager needs a session string AND more than one bot token
     ctx["userbot_configured"] = botmod.Userbot is not None
     ctx["multi_token_available"] = len(multi_clients) > 1
-    return templates.TemplateResponse(
-        request=request,
-        name="tools.html",
-        context=ctx,
-    )
+    return templates.TemplateResponse("tools.html", ctx)
+
+
 #----- Settings page with current config and database list
 async def settings_page(request: Request, _: bool = Depends(require_auth)):
     settings = SettingsManager.current().to_dict()
@@ -315,8 +293,4 @@ async def settings_page(request: Request, _: bool = Depends(require_auth)):
         "settings": settings,
         "userbot_configured": botmod.Userbot is not None,
     })
-    return templates.TemplateResponse(
-        request=request,
-        name="settings.html",
-        context=ctx,
-    )
+    return templates.TemplateResponse("settings.html", ctx)

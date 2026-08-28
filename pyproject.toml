@@ -31,3 +31,6 @@ dependencies = [
 dev = [
     "deptry>=0.23.1",
 ]
+
+[tool.setuptools.packages.find]
+include = ["Backend*"]

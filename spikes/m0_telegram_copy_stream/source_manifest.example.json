@@ -1,0 +1,20 @@
+{
+  "logical_name": "Movie.Test.mkv",
+  "parts": [
+    {
+      "index": 0,
+      "source_chat_id": -1001111111111,
+      "source_message_id": 101
+    },
+    {
+      "index": 1,
+      "source_chat_id": -1001111111111,
+      "source_message_id": 102
+    },
+    {
+      "index": 2,
+      "source_chat_id": -1001111111111,
+      "source_message_id": 103
+    }
+  ]
+}
