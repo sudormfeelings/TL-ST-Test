@@ -1,0 +1,12 @@
+HTTP/1.1 206 Partial Content
+date: Fri, 28 Aug 2026 14:23:04 GMT
+server: uvicorn
+content-type: application/octet-stream
+content-disposition: inline; filename="tl-core-m5c-disposable-m6b-playback.bin"; filename*=UTF-8''tl-core-m5c-disposable-m6b-playback.bin
+accept-ranges: bytes
+content-length: 501
+cache-control: public, max-age=3600
+access-control-allow-origin: *
+access-control-expose-headers: Content-Length, Content-Range, Accept-Ranges
+content-range: bytes 700-1200/285303
+
