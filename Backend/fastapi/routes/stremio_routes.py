@@ -13,6 +13,9 @@ from pyrogram.errors import UserNotParticipant
 
 from Backend import __version__, db
 from Backend.config import Telegram
+from Backend.core_client import CoreClientError
+from Backend.core_discovery import core_requested_identity, core_source_stream
+from Backend.core_playback import CorePlaybackNotConfigured, get_core_client
 from Backend.helper.analytics import client_ip_from, record_client
 from Backend.fastapi.security.tokens import verify_token
 from Backend.fastapi.themes import DEFAULT_THEME, get_theme
@@ -901,6 +904,24 @@ async def _global_streams_for(
     return _streams_from_global_results(token, global_results)
 
 
+async def _core_streams_for(media_type: str, stremio_id: str) -> list[dict]:
+    requested = core_requested_identity(media_type, stremio_id)
+    if requested is None:
+        return []
+    try:
+        sources = await get_core_client().discover_sources(requested)
+        public_base_url = SettingsManager.current().base_url
+        return [core_source_stream(source, public_base_url) for source in sources]
+    except CorePlaybackNotConfigured:
+        return []
+    except CoreClientError as exc:
+        LOGGER.warning(f"[TL CORE] Source discovery unavailable: {exc.code.value}")
+        return []
+    except ValueError:
+        LOGGER.warning("[TL CORE] Source discovery presentation is not configured")
+        return []
+
+
 #----- Cached check that a user is still in the subscription group (fail-open)
 async def _is_subscription_member(user_id: int) -> bool:
     group_id = SettingsManager.current().subscription_group_id
@@ -1085,9 +1106,6 @@ async def get_streams(
         if filtered:
             streams = filtered
 
-    if not streams:
-        return {"streams": []}
-
     ascending = config.get("quality_sort") == "asc"
     if is_combined:
         streams.sort(key=lambda s: s.get("episode_start", 0))
@@ -1107,6 +1125,7 @@ async def get_streams(
         if name_count[s["name"]] > 1:
             seen[s["name"]] = seen.get(s["name"], 0) + 1
             s["name"] = f"{s['name']} ({seen[s['name']]})"
+    streams.extend(await _core_streams_for(media_type, id))
     return {"streams": streams}
 
 #----- Configure/install landing page rendered as HTML for a token

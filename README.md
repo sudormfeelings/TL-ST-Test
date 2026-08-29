@@ -144,6 +144,14 @@ vlc $url
 
 For the real disposable smoke, first publish two or three disposable parts through UPLINK and ensure the local Stream installation has its own Core STREAM credential and Viewer Telegram USER session. Invoke the URL above, confirm Core materializes/returns the Viewer Cache, and verify beginning, middle, suffix, cross-part, VLC playback, and seeking. Confirm the URL contains only `source_id`. After Cache is READY, optionally delete only the disposable uploader-origin messages and repeat playback; it must continue from Viewer Cache. Do not delete meaningful media.
 
+### M6C-B Stremio Source Discovery
+
+The existing authenticated Stremio stream resource now adds TL-Core logical Sources to legacy Mongo/Global Search results. Stream translates deterministic Stremio identities—IMDb movie and season/episode IDs plus Kitsu series and absolute-episode IDs—into the existing Core requested-identity contract. Stream does not perform title matching, anime crosswalks, or canonical-ID inference; TL-Core remains authoritative for metadata resolution.
+
+`GET /stremio/{token}/stream/{media_type}/{id}.json` makes at most one authenticated `POST /api/v1/stream/sources` request. Every returned logical Source becomes a presentation-only entry containing its original filename, size, optional part count, and an existing `/stream/core/{source_id}` playback URL. Core ordering is preserved, duplicate filenames remain distinct by Source UUID, and no quality, codec, HDR, popularity, or cache-locality ranking is applied.
+
+Source listing is side-effect free: it never calls `ensure_cache` or cache materialization and never uses Telegram coordinates. Cache creation remains deferred until the user selects `/stream/core/{source_id}`, where the proven M6B-B playback path takes over. Missing Core configuration, no Core matches, or a sanitized Core failure affects only Core entries; legacy indexed and Global Search behavior continues. The Core bearer credential remains server-local and is never placed in Stremio JSON or playback URLs.
+
 ---
 
 ## 📱 Don't have a server? Use the TeleStremio Android app

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from typing import Any
 from urllib.parse import urlsplit
@@ -91,6 +92,16 @@ class MaterializationResult:
     parts: tuple[CacheLocatorPart, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class DiscoveredSource:
+    source_id: UUID
+    original_filename: str
+    total_size_bytes: int
+    expected_part_count: int
+    created_at: datetime
+    published_at: datetime | None
+
+
 def _positive_int(value: Any) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise CoreClientError(CoreErrorCode.INVALID_CORE_RESPONSE)
@@ -122,6 +133,32 @@ def _boolean(value: Any) -> bool:
     if not isinstance(value, bool):
         raise CoreClientError(CoreErrorCode.INVALID_CORE_RESPONSE)
     return value
+
+
+def _nonnegative_int(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise CoreClientError(CoreErrorCode.INVALID_CORE_RESPONSE)
+    return value
+
+
+def _string(value: Any) -> str:
+    if not isinstance(value, str) or not value:
+        raise CoreClientError(CoreErrorCode.INVALID_CORE_RESPONSE)
+    return value
+
+
+def _datetime(value: Any, *, nullable: bool = False) -> datetime | None:
+    if value is None and nullable:
+        return None
+    if not isinstance(value, str):
+        raise CoreClientError(CoreErrorCode.INVALID_CORE_RESPONSE)
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise CoreClientError(CoreErrorCode.INVALID_CORE_RESPONSE) from None
+    if parsed.tzinfo is None:
+        raise CoreClientError(CoreErrorCode.INVALID_CORE_RESPONSE)
+    return parsed
 
 
 def _parts(value: Any, expected_count: int) -> tuple[CacheLocatorPart, ...]:
@@ -346,6 +383,79 @@ class TLCoreClient:
             expected_part_count=expected_count,
             parts=_parts(cache["parts"], expected_count),
         )
+
+    async def discover_sources(
+        self,
+        requested_identity: dict[str, Any],
+    ) -> tuple[DiscoveredSource, ...]:
+        payload = _object(
+            await self._request_json(
+                "POST",
+                "/api/v1/stream/sources",
+                json=requested_identity,
+            ),
+            {"requested", "canonical", "sources"},
+        )
+        requested = _object(
+            payload["requested"],
+            {"raw_id", "provider", "namespace", "external_id", "episode"},
+        )
+        _string(requested["provider"])
+        _string(requested["namespace"])
+        _string(requested["external_id"])
+        if requested["raw_id"] is not None and not isinstance(requested["raw_id"], str):
+            raise CoreClientError(CoreErrorCode.INVALID_CORE_RESPONSE)
+        if requested["episode"] is not None:
+            episode = _object(
+                requested["episode"],
+                {"kind", "season_number", "episode_number", "absolute_number"},
+            )
+            kind = _string(episode["kind"])
+            if kind == "SEASON_EPISODE":
+                _nonnegative_int(episode["season_number"])
+                _positive_int(episode["episode_number"])
+                if episode["absolute_number"] is not None:
+                    raise CoreClientError(CoreErrorCode.INVALID_CORE_RESPONSE)
+            elif kind == "ABSOLUTE":
+                _positive_int(episode["absolute_number"])
+                if episode["season_number"] is not None or episode["episode_number"] is not None:
+                    raise CoreClientError(CoreErrorCode.INVALID_CORE_RESPONSE)
+            else:
+                raise CoreClientError(CoreErrorCode.INVALID_CORE_RESPONSE)
+
+        canonical = _object(payload["canonical"], {"media_id", "media_type", "episode_id"})
+        _uuid(canonical["media_id"])
+        _string(canonical["media_type"])
+        if canonical["episode_id"] is not None:
+            _uuid(canonical["episode_id"])
+
+        raw_sources = payload["sources"]
+        if not isinstance(raw_sources, list):
+            raise CoreClientError(CoreErrorCode.INVALID_CORE_RESPONSE)
+        sources: list[DiscoveredSource] = []
+        for raw_source in raw_sources:
+            source = _object(
+                raw_source,
+                {
+                    "source_id",
+                    "original_filename",
+                    "total_size_bytes",
+                    "expected_part_count",
+                    "created_at",
+                    "published_at",
+                },
+            )
+            sources.append(
+                DiscoveredSource(
+                    source_id=_uuid(source["source_id"]),
+                    original_filename=_string(source["original_filename"]),
+                    total_size_bytes=_positive_int(source["total_size_bytes"]),
+                    expected_part_count=_positive_int(source["expected_part_count"]),
+                    created_at=_datetime(source["created_at"]),
+                    published_at=_datetime(source["published_at"], nullable=True),
+                )
+            )
+        return tuple(sources)
 
     async def ensure_cache(
         self,
