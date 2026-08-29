@@ -152,6 +152,14 @@ The existing authenticated Stremio stream resource now adds TL-Core logical Sour
 
 Source listing is side-effect free: it never calls `ensure_cache` or cache materialization and never uses Telegram coordinates. Cache creation remains deferred until the user selects `/stream/core/{source_id}`, where the proven M6B-B playback path takes over. Missing Core configuration, no Core matches, or a sanitized Core failure affects only Core entries; legacy indexed and Global Search behavior continues. The Core bearer credential remains server-local and is never placed in Stremio JSON or playback URLs.
 
+### M7C-A Core Source presentation
+
+Stream requests enriched Source discovery once with `include_presentation=true` and formats TL-Core's typed, Viewer-safe presentation metadata for Stremio. Core remains the sole authority for presentation semantics and Source ranking: Stream does not parse filenames for quality, reproduce `source_ranking_v1`, score Sources, select a preferred Source, or re-sort the Core response.
+
+Core entries prioritize resolution, source type or REMUX, video codec, HDR/Dolby Vision, audio, explicitly supplied language indicators, file size, and optional multipart count. `presentation.release_name` is preferred as descriptive text; when presentation is null or partial, Stream omits unknown tokens and falls back to the original filename and existing human-readable size display. Core Source order is preserved exactly, while legacy Mongo entries retain the established M6C-B coexistence behavior.
+
+Presentation is display-only. Playback authority remains the opaque `/stream/core/{source_id}` URL; no presentation value, Core credential, Replica information, installation identity, or Telegram topology enters Stremio output or the playback path. M7C-A adds no user quality, codec, HDR, language, or file-size preferences.
+
 ---
 
 ## 📱 Don't have a server? Use the TeleStremio Android app

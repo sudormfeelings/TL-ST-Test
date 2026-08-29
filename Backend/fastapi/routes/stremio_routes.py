@@ -909,7 +909,10 @@ async def _core_streams_for(media_type: str, stremio_id: str) -> list[dict]:
     if requested is None:
         return []
     try:
-        sources = await get_core_client().discover_sources(requested)
+        sources = await get_core_client().discover_sources(
+            requested,
+            include_presentation=True,
+        )
         public_base_url = SettingsManager.current().base_url
         return [core_source_stream(source, public_base_url) for source in sources]
     except CorePlaybackNotConfigured:

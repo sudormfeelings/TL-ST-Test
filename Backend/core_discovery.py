@@ -5,7 +5,13 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from Backend.core_client import DiscoveredSource
+from Backend.core_client import (
+    DiscoveredSource,
+    DiscoveredSourcePresentation,
+    PresentationAudioCodec,
+    PresentationHdrFormat,
+    PresentationSourceType,
+)
 from Backend.core_playback import build_core_stream_url
 
 
@@ -84,11 +90,96 @@ def core_requested_identity(media_type: str, stremio_id: str) -> dict[str, Any] 
 def core_source_stream(source: DiscoveredSource, public_base_url: str) -> dict[str, Any]:
     size = _format_size(source.total_size_bytes)
     part_suffix = f" · {source.expected_part_count} parts" if source.expected_part_count > 1 else ""
+    presentation = source.presentation
+    display_tokens = _presentation_tokens(presentation) if presentation is not None else []
+    release_name = (
+        presentation.release_name
+        if presentation is not None and presentation.release_name is not None
+        else source.original_filename
+    )
+    resolution = presentation.resolution.value if presentation is not None and presentation.resolution else None
+    title_lines = [release_name]
+    if display_tokens:
+        title_lines.append(" · ".join(display_tokens))
+    title_lines.append(f"{size}{part_suffix}")
     return {
-        "name": "TL Core",
-        "title": f"{source.original_filename}\n{size}{part_suffix}",
+        "name": f"TL Core · {resolution}" if resolution else "TL Core",
+        "title": "\n".join(title_lines),
         "url": build_core_stream_url(public_base_url, source.source_id),
     }
+
+
+_SOURCE_TYPE_LABELS = {
+    PresentationSourceType.WEB_DL: "WEB-DL",
+    PresentationSourceType.WEBRIP: "WEBRip",
+    PresentationSourceType.BLURAY: "BluRay",
+    PresentationSourceType.BDRIP: "BDRip",
+    PresentationSourceType.REMUX: "REMUX",
+    PresentationSourceType.HDTV: "HDTV",
+}
+_HDR_LABELS = {
+    PresentationHdrFormat.HDR: "HDR",
+    PresentationHdrFormat.HDR10: "HDR10",
+    PresentationHdrFormat.HDR10_PLUS: "HDR10+",
+    PresentationHdrFormat.DOLBY_VISION: "DV",
+}
+_AUDIO_LABELS = {
+    PresentationAudioCodec.AAC: "AAC",
+    PresentationAudioCodec.AC3: "AC3",
+    PresentationAudioCodec.EAC3: "EAC3",
+    PresentationAudioCodec.DTS: "DTS",
+    PresentationAudioCodec.DTS_HD: "DTS-HD",
+    PresentationAudioCodec.DTS_HD_MA: "DTS-HD MA",
+    PresentationAudioCodec.TRUEHD: "TRUEHD",
+    PresentationAudioCodec.FLAC: "FLAC",
+    PresentationAudioCodec.OPUS: "OPUS",
+}
+
+
+def _presentation_tokens(presentation: DiscoveredSourcePresentation) -> list[str]:
+    tokens: list[str] = []
+    if presentation.resolution is not None:
+        tokens.append(presentation.resolution.value)
+
+    is_remux = presentation.is_remux is True or presentation.source_type is PresentationSourceType.REMUX
+    if is_remux:
+        tokens.append("REMUX")
+    elif presentation.source_type is not None:
+        tokens.append(_SOURCE_TYPE_LABELS[presentation.source_type])
+
+    if presentation.video_codec is not None:
+        video = presentation.video_codec.value
+        if presentation.video_profile is not None:
+            video += f" {presentation.video_profile}"
+        tokens.append(video)
+
+    if presentation.hdr_format is not None:
+        tokens.append(_HDR_LABELS[presentation.hdr_format])
+    elif presentation.is_dolby_vision is True:
+        tokens.append("DV")
+    elif presentation.is_hdr is True:
+        tokens.append("HDR")
+
+    if presentation.audio_codec is not None:
+        audio = _AUDIO_LABELS[presentation.audio_codec]
+        channel_detail = presentation.audio_channels or presentation.audio_layout
+        if channel_detail is not None:
+            audio += f" {channel_detail}"
+        tokens.append(audio)
+    elif presentation.audio_channels is not None:
+        tokens.append(presentation.audio_channels)
+    elif presentation.audio_layout is not None:
+        tokens.append(presentation.audio_layout)
+
+    if presentation.is_multi_audio is True:
+        tokens.append("Multi-Audio")
+    elif presentation.is_dual_audio is True:
+        tokens.append("Dual Audio")
+    if presentation.audio_languages:
+        tokens.append(f"Audio: {'/'.join(language.upper() for language in presentation.audio_languages)}")
+    if presentation.subtitle_languages:
+        tokens.append(f"Subs: {'/'.join(language.upper() for language in presentation.subtitle_languages)}")
+    return tokens
 
 
 def _format_size(size_bytes: int) -> str:
