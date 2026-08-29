@@ -92,6 +92,79 @@ class MaterializationResult:
     parts: tuple[CacheLocatorPart, ...]
 
 
+class PresentationContainer(str, Enum):
+    MKV = "MKV"
+    MP4 = "MP4"
+    AVI = "AVI"
+    TS = "TS"
+    M2TS = "M2TS"
+    WEBM = "WEBM"
+
+
+class PresentationResolution(str, Enum):
+    UHD_2160P = "2160P"
+    FHD_1080P = "1080P"
+    HD_720P = "720P"
+    SD_480P = "480P"
+
+
+class PresentationVideoCodec(str, Enum):
+    AV1 = "AV1"
+    HEVC = "HEVC"
+    AVC = "AVC"
+
+
+class PresentationHdrFormat(str, Enum):
+    HDR = "HDR"
+    HDR10 = "HDR10"
+    HDR10_PLUS = "HDR10_PLUS"
+    DOLBY_VISION = "DOLBY_VISION"
+
+
+class PresentationAudioCodec(str, Enum):
+    AAC = "AAC"
+    AC3 = "AC3"
+    EAC3 = "EAC3"
+    DTS = "DTS"
+    DTS_HD = "DTS_HD"
+    DTS_HD_MA = "DTS_HD_MA"
+    TRUEHD = "TRUEHD"
+    FLAC = "FLAC"
+    OPUS = "OPUS"
+
+
+class PresentationSourceType(str, Enum):
+    WEB_DL = "WEB_DL"
+    WEBRIP = "WEBRIP"
+    BLURAY = "BLURAY"
+    BDRIP = "BDRIP"
+    REMUX = "REMUX"
+    HDTV = "HDTV"
+
+
+@dataclass(frozen=True, slots=True)
+class DiscoveredSourcePresentation:
+    release_name: str | None
+    container: PresentationContainer | None
+    resolution: PresentationResolution | None
+    video_codec: PresentationVideoCodec | None
+    video_profile: str | None
+    hdr_format: PresentationHdrFormat | None
+    audio_codec: PresentationAudioCodec | None
+    audio_channels: str | None
+    audio_layout: str | None
+    audio_languages: tuple[str, ...] | None
+    subtitle_languages: tuple[str, ...] | None
+    edition: str | None
+    release_group: str | None
+    source_type: PresentationSourceType | None
+    is_remux: bool | None
+    is_hdr: bool | None
+    is_dolby_vision: bool | None
+    is_dual_audio: bool | None
+    is_multi_audio: bool | None
+
+
 @dataclass(frozen=True, slots=True)
 class DiscoveredSource:
     source_id: UUID
@@ -100,6 +173,7 @@ class DiscoveredSource:
     expected_part_count: int
     created_at: datetime
     published_at: datetime | None
+    presentation: DiscoveredSourcePresentation | None = None
 
 
 def _positive_int(value: Any) -> int:
@@ -145,6 +219,83 @@ def _string(value: Any) -> str:
     if not isinstance(value, str) or not value:
         raise CoreClientError(CoreErrorCode.INVALID_CORE_RESPONSE)
     return value
+
+
+def _nullable_string(value: Any) -> str | None:
+    return None if value is None else _string(value)
+
+
+def _nullable_boolean(value: Any) -> bool | None:
+    return None if value is None else _boolean(value)
+
+
+def _nullable_enum(value: Any, enum_type: type[Enum]):
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise CoreClientError(CoreErrorCode.INVALID_CORE_RESPONSE)
+    try:
+        return enum_type(value)
+    except ValueError:
+        raise CoreClientError(CoreErrorCode.INVALID_CORE_RESPONSE) from None
+
+
+def _nullable_strings(value: Any) -> tuple[str, ...] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        raise CoreClientError(CoreErrorCode.INVALID_CORE_RESPONSE)
+    return tuple(_string(item) for item in value)
+
+
+_PRESENTATION_KEYS = {
+    "release_name",
+    "container",
+    "resolution",
+    "video_codec",
+    "video_profile",
+    "hdr_format",
+    "audio_codec",
+    "audio_channels",
+    "audio_layout",
+    "audio_languages",
+    "subtitle_languages",
+    "edition",
+    "release_group",
+    "source_type",
+    "is_remux",
+    "is_hdr",
+    "is_dolby_vision",
+    "is_dual_audio",
+    "is_multi_audio",
+}
+
+
+def _source_presentation(value: Any) -> DiscoveredSourcePresentation | None:
+    if value is None:
+        return None
+    item = _object(value, _PRESENTATION_KEYS)
+    return DiscoveredSourcePresentation(
+        release_name=_nullable_string(item["release_name"]),
+        container=_nullable_enum(item["container"], PresentationContainer),
+        resolution=_nullable_enum(item["resolution"], PresentationResolution),
+        video_codec=_nullable_enum(item["video_codec"], PresentationVideoCodec),
+        video_profile=_nullable_string(item["video_profile"]),
+        hdr_format=_nullable_enum(item["hdr_format"], PresentationHdrFormat),
+        audio_codec=_nullable_enum(item["audio_codec"], PresentationAudioCodec),
+        audio_channels=_nullable_string(item["audio_channels"]),
+        audio_layout=_nullable_string(item["audio_layout"]),
+        audio_languages=_nullable_strings(item["audio_languages"]),
+        subtitle_languages=_nullable_strings(item["subtitle_languages"]),
+        edition=_nullable_string(item["edition"]),
+        release_group=_nullable_string(item["release_group"]),
+        source_type=_nullable_enum(item["source_type"], PresentationSourceType),
+        is_remux=_nullable_boolean(item["is_remux"]),
+        is_hdr=_nullable_boolean(item["is_hdr"]),
+        is_dolby_vision=_nullable_boolean(item["is_dolby_vision"]),
+        is_dual_audio=_nullable_boolean(item["is_dual_audio"]),
+        is_multi_audio=_nullable_boolean(item["is_multi_audio"]),
+    )
 
 
 def _datetime(value: Any, *, nullable: bool = False) -> datetime | None:
@@ -387,11 +538,16 @@ class TLCoreClient:
     async def discover_sources(
         self,
         requested_identity: dict[str, Any],
+        *,
+        include_presentation: bool = False,
     ) -> tuple[DiscoveredSource, ...]:
+        path = "/api/v1/stream/sources"
+        if include_presentation:
+            path += "?include_presentation=true"
         payload = _object(
             await self._request_json(
                 "POST",
-                "/api/v1/stream/sources",
+                path,
                 json=requested_identity,
             ),
             {"requested", "canonical", "sources"},
@@ -434,16 +590,19 @@ class TLCoreClient:
             raise CoreClientError(CoreErrorCode.INVALID_CORE_RESPONSE)
         sources: list[DiscoveredSource] = []
         for raw_source in raw_sources:
+            source_keys = {
+                "source_id",
+                "original_filename",
+                "total_size_bytes",
+                "expected_part_count",
+                "created_at",
+                "published_at",
+            }
+            if include_presentation:
+                source_keys.add("presentation")
             source = _object(
                 raw_source,
-                {
-                    "source_id",
-                    "original_filename",
-                    "total_size_bytes",
-                    "expected_part_count",
-                    "created_at",
-                    "published_at",
-                },
+                source_keys,
             )
             sources.append(
                 DiscoveredSource(
@@ -453,6 +612,11 @@ class TLCoreClient:
                     expected_part_count=_positive_int(source["expected_part_count"]),
                     created_at=_datetime(source["created_at"]),
                     published_at=_datetime(source["published_at"], nullable=True),
+                    presentation=(
+                        _source_presentation(source["presentation"])
+                        if include_presentation
+                        else None
+                    ),
                 )
             )
         return tuple(sources)
