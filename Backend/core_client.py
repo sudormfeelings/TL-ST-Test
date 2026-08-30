@@ -5,13 +5,21 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+import math
 from typing import Any
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 import httpx
 
-from Backend.config import TLCore
+from Backend.config import (
+    DEFAULT_TL_CORE_RECOVERY_TIMEOUT_SECONDS,
+    MAX_TL_CORE_RECOVERY_TIMEOUT_SECONDS,
+    TLCore,
+)
+
+
+DEFAULT_CORE_TIMEOUT_SECONDS = 10.0
 
 
 class CoreErrorCode(str, Enum):
@@ -25,6 +33,7 @@ class CoreErrorCode(str, Enum):
     SOURCE_NOT_PUBLISHED = "SOURCE_NOT_PUBLISHED"
     SOURCE_NOT_AVAILABLE = "SOURCE_NOT_AVAILABLE"
     CACHE_NOT_READY = "CACHE_NOT_READY"
+    CACHE_NOT_FOUND = "CACHE_NOT_FOUND"
     CACHE_INVALID = "CACHE_INVALID"
     CACHE_STORAGE_NOT_CONFIGURED = "CACHE_STORAGE_NOT_CONFIGURED"
     CACHE_STORAGE_INVALID = "CACHE_STORAGE_INVALID"
@@ -34,6 +43,11 @@ class CoreErrorCode(str, Enum):
     CACHE_COPY_SOURCE_MISSING = "CACHE_COPY_SOURCE_MISSING"
     CACHE_COPY_FORBIDDEN = "CACHE_COPY_FORBIDDEN"
     CACHE_COPY_UNAVAILABLE = "CACHE_COPY_UNAVAILABLE"
+    CACHE_HEALTH_UNCERTAIN = "CACHE_HEALTH_UNCERTAIN"
+    CACHE_HEALTH_RECONCILIATION_FAILED = "CACHE_HEALTH_RECONCILIATION_FAILED"
+    RECOVERY_SOURCE_UNAVAILABLE = "RECOVERY_SOURCE_UNAVAILABLE"
+    RECOVERY_IN_PROGRESS = "RECOVERY_IN_PROGRESS"
+    RECOVERY_RECONCILIATION_REQUIRED = "RECOVERY_RECONCILIATION_REQUIRED"
     IDEMPOTENCY_KEY_REUSED = "IDEMPOTENCY_KEY_REUSED"
     STREAM_READ_UNAVAILABLE = "STREAM_READ_UNAVAILABLE"
     CORE_UNAVAILABLE = "CORE_UNAVAILABLE"
@@ -88,6 +102,54 @@ class MaterializationResult:
     source_id: UUID
     cache_replica_id: UUID
     status: str
+    expected_part_count: int
+    parts: tuple[CacheLocatorPart, ...]
+
+
+class CacheHealthOutcome(str, Enum):
+    REPLICA_HEALTHY = "REPLICA_HEALTHY"
+    REPLICA_DEGRADED = "REPLICA_DEGRADED"
+    REPLICA_MISSING = "REPLICA_MISSING"
+    REPLICA_INVALID_SHAPE = "REPLICA_INVALID_SHAPE"
+    RECONCILIATION_RETRYABLE = "RECONCILIATION_RETRYABLE"
+    RECONCILIATION_FAILED = "RECONCILIATION_FAILED"
+
+
+class ReplicaAvailability(str, Enum):
+    UNKNOWN = "UNKNOWN"
+    AVAILABLE = "AVAILABLE"
+    DEGRADED = "DEGRADED"
+    MISSING = "MISSING"
+    UNREACHABLE = "UNREACHABLE"
+
+
+class SourceAvailability(str, Enum):
+    UNKNOWN = "UNKNOWN"
+    AVAILABLE = "AVAILABLE"
+    DEGRADED = "DEGRADED"
+    UNAVAILABLE = "UNAVAILABLE"
+
+
+@dataclass(frozen=True, slots=True)
+class CacheHealthResult:
+    source_id: UUID
+    cache_replica_id: UUID
+    outcome: CacheHealthOutcome
+    previous_availability: ReplicaAvailability
+    resulting_availability: ReplicaAvailability
+    source_availability: SourceAvailability
+    retryable: bool
+
+
+@dataclass(frozen=True, slots=True)
+class CacheRecoveryResult:
+    materialization_id: UUID
+    source_id: UUID
+    cache_replica_id: UUID
+    status: str
+    idempotent: bool
+    recovered: bool
+    reused: bool
     expected_part_count: int
     parts: tuple[CacheLocatorPart, ...]
 
@@ -341,7 +403,8 @@ class TLCoreClient:
         base_url: str,
         credential: str,
         *,
-        timeout_seconds: float = 10.0,
+        timeout_seconds: float = DEFAULT_CORE_TIMEOUT_SECONDS,
+        recovery_timeout_seconds: float = DEFAULT_TL_CORE_RECOVERY_TIMEOUT_SECONDS,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         normalized_url = base_url.strip().rstrip("/")
@@ -359,9 +422,19 @@ class TLCoreClient:
             raise ValueError("TL_CORE_CREDENTIAL is required")
         if timeout_seconds <= 0:
             raise ValueError("Core timeout must be positive")
+        if (
+            not math.isfinite(recovery_timeout_seconds)
+            or recovery_timeout_seconds <= 0
+            or recovery_timeout_seconds > MAX_TL_CORE_RECOVERY_TIMEOUT_SECONDS
+        ):
+            raise ValueError(
+                "Core recovery timeout must be positive, finite, and no more than "
+                f"{MAX_TL_CORE_RECOVERY_TIMEOUT_SECONDS:g} seconds"
+            )
 
         normalized_credential = credential.strip()
         self._base_url = normalized_url
+        self._recovery_timeout_seconds = recovery_timeout_seconds
         self._client = httpx.AsyncClient(
             headers={"Authorization": f"Bearer {normalized_credential}"},
             timeout=httpx.Timeout(timeout_seconds),
@@ -371,7 +444,11 @@ class TLCoreClient:
 
     @classmethod
     def from_config(cls) -> "TLCoreClient":
-        return cls(TLCore.BASE_URL, TLCore.CREDENTIAL)
+        return cls(
+            TLCore.BASE_URL,
+            TLCore.CREDENTIAL,
+            recovery_timeout_seconds=TLCore.RECOVERY_TIMEOUT_SECONDS,
+        )
 
     async def __aenter__(self) -> "TLCoreClient":
         return self
@@ -390,16 +467,21 @@ class TLCoreClient:
         json: dict[str, Any] | None = None,
         idempotency_key: str | None = None,
         retry_uncertain_post: bool = False,
+        request_timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         headers = {"Idempotency-Key": idempotency_key} if idempotency_key is not None else None
         attempts = 2 if retry_uncertain_post else 1
         for attempt in range(attempts):
             try:
+                request_options = {}
+                if request_timeout_seconds is not None:
+                    request_options["timeout"] = httpx.Timeout(request_timeout_seconds)
                 response = await self._client.request(
                     method,
                     f"{self._base_url}{path}",
                     headers=headers,
                     json=json,
+                    **request_options,
                 )
             except httpx.TransportError:
                 if attempt + 1 < attempts:
@@ -531,6 +613,95 @@ class TLCoreClient:
             source_id=returned_source_id,
             cache_replica_id=_uuid(payload["cache_replica_id"]),
             status="READY",
+            expected_part_count=expected_count,
+            parts=_parts(cache["parts"], expected_count),
+        )
+
+    async def check_cache_health(self, source_id: UUID | str) -> CacheHealthResult:
+        requested_source_id = _uuid(str(source_id))
+        payload = _object(
+            await self._request_json(
+                "POST",
+                "/api/v1/cache/health",
+                json={"source_id": str(requested_source_id)},
+            ),
+            {
+                "source_id",
+                "cache_replica_id",
+                "outcome",
+                "previous_availability",
+                "resulting_availability",
+                "source_availability",
+                "retryable",
+            },
+        )
+        returned_source_id = _uuid(payload["source_id"])
+        if returned_source_id != requested_source_id:
+            raise CoreClientError(CoreErrorCode.INVALID_CORE_RESPONSE)
+        outcome = _nullable_enum(payload["outcome"], CacheHealthOutcome)
+        previous = _nullable_enum(payload["previous_availability"], ReplicaAvailability)
+        resulting = _nullable_enum(payload["resulting_availability"], ReplicaAvailability)
+        source_availability = _nullable_enum(payload["source_availability"], SourceAvailability)
+        if None in {outcome, previous, resulting, source_availability}:
+            raise CoreClientError(CoreErrorCode.INVALID_CORE_RESPONSE)
+        retryable = _boolean(payload["retryable"])
+        if retryable is not (outcome is CacheHealthOutcome.RECONCILIATION_RETRYABLE):
+            raise CoreClientError(CoreErrorCode.INVALID_CORE_RESPONSE)
+        return CacheHealthResult(
+            source_id=returned_source_id,
+            cache_replica_id=_uuid(payload["cache_replica_id"]),
+            outcome=outcome,
+            previous_availability=previous,
+            resulting_availability=resulting,
+            source_availability=source_availability,
+            retryable=retryable,
+        )
+
+    async def recover_cache(
+        self,
+        source_id: UUID | str,
+        idempotency_key: str,
+    ) -> CacheRecoveryResult:
+        requested_source_id = _uuid(str(source_id))
+        if not idempotency_key:
+            raise ValueError("idempotency_key is required")
+        payload = _object(
+            await self._request_json(
+                "POST",
+                "/api/v1/cache/recover",
+                json={"source_id": str(requested_source_id)},
+                idempotency_key=idempotency_key,
+                request_timeout_seconds=self._recovery_timeout_seconds,
+            ),
+            {
+                "materialization_id",
+                "source_id",
+                "cache_replica_id",
+                "status",
+                "idempotent",
+                "recovered",
+                "reused",
+                "expected_part_count",
+                "cache",
+            },
+        )
+        returned_source_id = _uuid(payload["source_id"])
+        if returned_source_id != requested_source_id or payload["status"] != "READY":
+            raise CoreClientError(CoreErrorCode.INVALID_CORE_RESPONSE)
+        expected_count = _positive_int(payload["expected_part_count"])
+        cache = _object(payload["cache"], {"parts"})
+        recovered = _boolean(payload["recovered"])
+        reused = _boolean(payload["reused"])
+        if recovered is reused:
+            raise CoreClientError(CoreErrorCode.INVALID_CORE_RESPONSE)
+        return CacheRecoveryResult(
+            materialization_id=_uuid(payload["materialization_id"]),
+            source_id=returned_source_id,
+            cache_replica_id=_uuid(payload["cache_replica_id"]),
+            status="READY",
+            idempotent=_boolean(payload["idempotent"]),
+            recovered=recovered,
+            reused=reused,
             expected_part_count=expected_count,
             parts=_parts(cache["parts"], expected_count),
         )

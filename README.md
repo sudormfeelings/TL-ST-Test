@@ -83,9 +83,15 @@ Configure the local Stream installation with two separate Core values:
 ```env
 TL_CORE_BASE_URL=https://core.example.com
 TL_CORE_CREDENTIAL=
+TL_CORE_RECOVERY_TIMEOUT_SECONDS=90
 ```
 
 `TL_CORE_CREDENTIAL` is the authenticated STREAM installation credential. It is sent only as a Bearer authorization header and must never be committed, logged, shared, or placed in a URL. It is not a Telegram credential. The Telegram API hash and Viewer user session remain a separate security domain and are never supplied by TL-Core.
+
+`TL_CORE_RECOVERY_TIMEOUT_SECONDS` is a non-secret, recovery-only timeout. It
+defaults to 90 seconds and accepts positive finite values up to 300 seconds.
+Invalid values fall back to the default. Bootstrap, discovery, health, cache
+locator, and normal Core calls retain the existing 10-second timeout.
 
 The Core client lazily calls `GET /api/v1/stream/bootstrap` and accepts only the authenticated Viewer's own semantic CACHE chat/thread topology with `storage_ready=true`. It does not derive topic meaning from names and does not scan Telegram topics. For a caller-supplied `source_id`, cache acquisition is bounded:
 
@@ -159,6 +165,131 @@ Stream requests enriched Source discovery once with `include_presentation=true` 
 Core entries prioritize resolution, source type or REMUX, video codec, HDR/Dolby Vision, audio, explicitly supplied language indicators, file size, and optional multipart count. `presentation.release_name` is preferred as descriptive text; when presentation is null or partial, Stream omits unknown tokens and falls back to the original filename and existing human-readable size display. Core Source order is preserved exactly, while legacy Mongo entries retain the established M6C-B coexistence behavior.
 
 Presentation is display-only. Playback authority remains the opaque `/stream/core/{source_id}` URL; no presentation value, Core credential, Replica information, installation identity, or Telegram topology enters Stremio output or the playback path. M7C-A adds no user quality, codec, HDR, language, or file-size preferences.
+
+### M8C-B bounded Viewer Cache recovery during playback
+
+Core-backed playback now reacts to one narrowly classified failure: a direct
+Viewer USER lookup proves that a destination message in the current Viewer
+Cache is absent or invalid. Network failures, timeouts, flood waits, session or
+authorization failures, cancellation, malformed ranges, invalid locators, and
+unknown exceptions are uncertain and never trigger recovery.
+
+Before response headers or body bytes are committed, one playback request may
+perform this bounded control sequence:
+
+1. `POST /api/v1/cache/health` once, with only `source_id`.
+2. Continue only when Core authoritatively reports a non-retryable broken
+   caller-owned cache (`MISSING` or `DEGRADED`) and the Source remains
+   `AVAILABLE`.
+3. `POST /api/v1/cache/recover` once, using one stable
+   `stream-recovery-<uuid>` idempotency key for that sequence.
+4. Fetch `GET /api/v1/stream/cache/{source_id}` once and validate the fresh
+   destination-only locator through the existing M6B contract.
+5. Resolve the complete fresh multipart descriptor and retry playback once.
+
+There are no loops, recursion, background repair, proactive health checks, or
+direct origin fallback. A retry failure exhausts the request budget. Failure
+after body streaming begins is not transparently replayed. The original Range
+and total virtual-file length must remain unchanged, so successful recovery
+preserves exact `206`, `Content-Range`, and `Content-Length` semantics without
+duplicating or skipping bytes.
+
+The single synchronous recovery POST uses the bounded
+`TL_CORE_RECOVERY_TIMEOUT_SECONDS` timeout (90 seconds by default, maximum 300)
+because Telegram multipart copying can legitimately exceed the normal
+10-second Core timeout. This does not add a transport retry: an ambiguous
+recovery timeout fails safely without a second POST, another idempotency key, a
+locator guess, or a playback retry.
+
+Healthy playback makes no health/recovery call and no extra locator fetch.
+`CACHE_NOT_READY` still uses the existing first-materialization path; it is not
+recovery. Stremio catalog, metadata, and stream listing remain side-effect free.
+Core remains the control plane, while the local Viewer Telegram USER session
+remains the only media-byte plane. The public playback URL remains exactly
+`/stream/core/{source_id}` and exposes no credential, recovery identifier,
+Replica identifier, Telegram coordinate, or origin topology.
+
+#### Exact real M8C-B smoke (run manually)
+
+Use a disposable two-part Source and Viewer Cache only. Do not run these steps
+against meaningful media. Keep credentials in environment variables and never
+paste them into commands, URLs, output, or documentation.
+
+```powershell
+# Terminal 1, from the TL-Core repository root:
+.\.venv\Scripts\python.exe -m uvicorn core.main:app --host 127.0.0.1 --port 8001
+
+# Terminal 2, from the Stream repository root. Configure TL_CORE_BASE_URL as
+# http://127.0.0.1:8001 and use the existing local Viewer USER session:
+.\.venv\Scripts\python.exe -m Backend
+
+# Terminal 3, from the Stream repository root:
+$sourceId = "<disposable-source-uuid>"
+$url = "http://127.0.0.1:8000/stream/core/$sourceId"
+curl.exe -sS -D baseline.headers -H "Range: bytes=0-511" $url -o baseline.bin
+(Get-Item .\baseline.bin).Length
+```
+
+Confirm the baseline status is `206`, `Content-Range` covers bytes `0-511`,
+`Content-Length` is `512`, and the file contains the expected deterministic
+fixture bytes. Record the current caller-owned Cache Replica UUID and all
+destination message IDs using the existing authenticated Core cache locator;
+do not put the credential in the URL:
+
+```powershell
+$headers = @{ Authorization = "Bearer $env:TL_CORE_CREDENTIAL" }
+$oldLocator = Invoke-RestMethod -Method Get `
+  -Uri "http://127.0.0.1:8001/api/v1/stream/cache/$sourceId" `
+  -Headers $headers
+$oldLocator
+```
+
+Manually delete only those disposable Viewer Cache Telegram messages. Do not
+call `/cache/health`, `/cache/recover`, or an M8A developer command. Request the
+same public URL and Range; the playback request itself must initiate recovery:
+
+```powershell
+curl.exe -sS -D recovered.headers -H "Range: bytes=0-511" $url -o recovered.bin
+(Get-Item .\recovered.bin).Length
+Compare-Object `
+  ([System.IO.File]::ReadAllBytes((Resolve-Path .\baseline.bin))) `
+  ([System.IO.File]::ReadAllBytes((Resolve-Path .\recovered.bin)))
+
+$newLocator = Invoke-RestMethod -Method Get `
+  -Uri "http://127.0.0.1:8001/api/v1/stream/cache/$sourceId" `
+  -Headers $headers
+$newLocator
+```
+
+Confirm the recovery request returns `206`, exactly 512 bytes, identical
+fixture bytes, and unchanged Range headers. Server logs must show no more than
+one health call, one recovery call, one fresh locator fetch, and one playback
+retry. Core durable state must show the old cache `MISSING` and retired, a new
+`AVAILABLE` cache with a different Replica UUID, and new destination messages.
+The URL must still contain only `source_id`.
+
+Finally, repeat a healthy request. It must use the replacement Cache with zero
+health calls and zero recovery calls:
+
+```powershell
+curl.exe -sS -D repeat.headers -H "Range: bytes=0-511" $url -o repeat.bin
+(Get-Item .\repeat.bin).Length
+```
+
+After inspection, clean only the disposable recovery/materialization rows with
+TL-Core's existing guarded cache helper, then clean the disposable Source with
+the existing publication helper. Supply the exact IDs recorded during setup;
+these commands do not delete Telegram messages:
+
+```powershell
+# From the TL-Core repository root, once per disposable request:
+.\.venv\Scripts\python.exe -m core.cache.smoke show --request-id <materialization-or-recovery-uuid>
+.\.venv\Scripts\python.exe -m core.cache.smoke cleanup --request-id <materialization-or-recovery-uuid>
+.\.venv\Scripts\python.exe -m core.sources.publication_smoke cleanup --source-id <source-uuid>
+```
+
+Transient and uncertain failure classification is covered by automated tests;
+do not intentionally break credentials or induce Telegram rate limits.
 
 ---
 

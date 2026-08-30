@@ -60,7 +60,13 @@ def is_media(message):
     )
 
 
-async def get_file_ids(client: Client, chat_id: int, message_id: int) -> Optional[FileId]:
+async def get_file_ids(
+    client: Client,
+    chat_id: int,
+    message_id: int,
+    *,
+    expose_error_details: bool = True,
+) -> Optional[FileId]:
     try:
         message = await client.get_messages(chat_id, message_id)
         if message.empty:
@@ -79,7 +85,10 @@ async def get_file_ids(client: Client, chat_id: int, message_id: int) -> Optiona
         else:
             raise FileNotFound("No supported media found in message")
     except Exception as e:
-        LOGGER.error(f"Error getting file IDs: {e}")
+        if expose_error_details:
+            LOGGER.error("Error getting file IDs: %s", e)
+        else:
+            LOGGER.error("Telegram media metadata lookup failed: %s", type(e).__name__)
         raise
 
 

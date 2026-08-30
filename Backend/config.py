@@ -1,3 +1,4 @@
+import math
 from os import getenv, path
 
 from dotenv import load_dotenv
@@ -10,6 +11,20 @@ def _int_env(key: str, default: int = 0) -> int:
         return int((getenv(key) or "").strip())
     except ValueError:
         return default
+
+
+DEFAULT_TL_CORE_RECOVERY_TIMEOUT_SECONDS = 90.0
+MAX_TL_CORE_RECOVERY_TIMEOUT_SECONDS = 300.0
+
+
+def _bounded_float_env(key: str, default: float, maximum: float) -> float:
+    try:
+        value = float((getenv(key) or "").strip())
+    except ValueError:
+        return default
+    if not math.isfinite(value) or value <= 0 or value > maximum:
+        return default
+    return value
 
 
 #----- Environment-backed configuration
@@ -46,5 +61,10 @@ class Telegram:
 
 #----- Stream installation's private TL-Core control-plane configuration
 class TLCore:
-    BASE_URL   = getenv("TL_CORE_BASE_URL", "").strip().rstrip("/")
+    BASE_URL = getenv("TL_CORE_BASE_URL", "").strip().rstrip("/")
     CREDENTIAL = getenv("TL_CORE_CREDENTIAL", "").strip()
+    RECOVERY_TIMEOUT_SECONDS = _bounded_float_env(
+        "TL_CORE_RECOVERY_TIMEOUT_SECONDS",
+        DEFAULT_TL_CORE_RECOVERY_TIMEOUT_SECONDS,
+        MAX_TL_CORE_RECOVERY_TIMEOUT_SECONDS,
+    )

@@ -16,6 +16,13 @@ from fastapi.responses import StreamingResponse
 from Backend import db
 from Backend.core_client import CoreClientError, CoreErrorCode
 from Backend.core_playback import CorePlaybackNotConfigured, get_core_client, locator_to_virtual_media
+from Backend.core_recovery import (
+    PlaybackRecoveryBudget,
+    discard_cached_file_properties,
+    health_allows_recovery,
+    is_definite_cache_loss,
+    new_recovery_idempotency_key,
+)
 from Backend.fastapi.security.tokens import verify_token
 from Backend.helper.analytics import client_ip_from, record_stream_start
 from Backend.helper.custom_dl import ACTIVE_STREAMS, RECENT_STREAMS, ByteStreamer
@@ -271,6 +278,28 @@ _CORE_ACCESS_ERRORS = {
 }
 
 
+async def _resolve_core_descriptor(descriptor, streamer):
+    discard_cached_file_properties(streamer, descriptor.parts)
+    parts, file_size = await resolve_virtual_parts(
+        descriptor.as_resolver_payload(),
+        streamer,
+        prefix_100=False,
+    )
+    expected_parts = descriptor.parts
+    if (
+        len(parts) != len(expected_parts)
+        or file_size != descriptor.total_size_bytes
+        or any(
+            resolved["chat_id"] != expected.chat_id
+            or resolved["msg_id"] != expected.msg_id
+            or resolved["size"] != expected.size_bytes
+            for resolved, expected in zip(parts, expected_parts)
+        )
+    ):
+        raise ValueError("Viewer Cache media metadata mismatch")
+    return parts, file_size
+
+
 #----- Destination-only Core Source playback through the Viewer USER session
 @router.get("/stream/core/{source_id}")
 @router.head("/stream/core/{source_id}")
@@ -290,34 +319,61 @@ async def core_cache_stream_handler(request: Request, source_id: UUID):
     except (TypeError, ValueError):
         raise HTTPException(status_code=503, detail="Core cache is temporarily unavailable") from None
 
+    range_header = request.headers.get("Range", "")
+    initial_file_size = descriptor.total_size_bytes
+    start, end = parse_range_header(range_header, initial_file_size)
+
     streamer = _get_core_userbot_streamer()
     if streamer is None:
         raise HTTPException(status_code=503, detail="Viewer Telegram session is unavailable")
 
+    recovery_budget = PlaybackRecoveryBudget()
     try:
-        parts, file_size = await resolve_virtual_parts(
-            descriptor.as_resolver_payload(),
-            streamer,
-            prefix_100=False,
-        )
-    except Exception:
-        raise HTTPException(status_code=503, detail="Viewer Cache media is unavailable") from None
+        parts, file_size = await _resolve_core_descriptor(descriptor, streamer)
+    except Exception as initial_error:
+        if not is_definite_cache_loss(initial_error):
+            raise HTTPException(status_code=503, detail="Viewer Cache media is unavailable") from None
 
-    expected_parts = descriptor.parts
-    if (
-        len(parts) != len(expected_parts)
-        or file_size != descriptor.total_size_bytes
-        or any(
-            resolved["chat_id"] != expected.chat_id
-            or resolved["msg_id"] != expected.msg_id
-            or resolved["size"] != expected.size_bytes
-            for resolved, expected in zip(parts, expected_parts)
-        )
-    ):
-        raise HTTPException(status_code=503, detail="Viewer Cache media is unavailable")
+        try:
+            recovery_budget.begin_health()
+            health = await core_client.check_cache_health(source_id)
+        except Exception:
+            LOGGER.warning(
+                "[TL CORE RECOVERY] source_id=%s recovery_phase=health result=failed",
+                source_id,
+            )
+            raise HTTPException(status_code=503, detail="Viewer Cache media is unavailable") from None
 
-    range_header = request.headers.get("Range", "")
-    start, end = parse_range_header(range_header, file_size)
+        if not health_allows_recovery(health):
+            LOGGER.warning(
+                "[TL CORE RECOVERY] source_id=%s recovery_phase=health result=not_recoverable",
+                source_id,
+            )
+            raise HTTPException(status_code=503, detail="Viewer Cache media is unavailable")
+
+        try:
+            recovery_budget.begin_recovery()
+            await core_client.recover_cache(source_id, new_recovery_idempotency_key())
+            recovery_budget.begin_locator_refresh()
+            fresh_locator = await core_client.get_cache(source_id)
+            fresh_descriptor = locator_to_virtual_media(fresh_locator)
+            if fresh_descriptor.total_size_bytes != initial_file_size:
+                raise ValueError("Recovered Viewer Cache size changed")
+            recovery_budget.begin_playback_retry()
+            parts, file_size = await _resolve_core_descriptor(fresh_descriptor, streamer)
+            descriptor = fresh_descriptor
+        except Exception:
+            LOGGER.warning(
+                "[TL CORE RECOVERY] source_id=%s recovery_phase=recover result=failed",
+                source_id,
+            )
+            raise HTTPException(status_code=503, detail="Viewer Cache media is unavailable") from None
+
+        LOGGER.info(
+            "[TL CORE RECOVERY] source_id=%s recovery_phase=retry result=ready",
+            source_id,
+        )
+
     requested_length = end - start + 1
     file_name, mime_type = _resolve_filename_mime(parts[0]["file_id"])
     headers, status = _build_stream_headers(

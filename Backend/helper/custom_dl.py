@@ -86,7 +86,12 @@ class ByteStreamer:
     async def get_file_properties(self, chat_id: int, message_id: int) -> FileId:
         cache_key = (int(chat_id), int(message_id))
         if cache_key not in self._file_id_cache:
-            file_id = await get_file_ids(self.client, int(chat_id), int(message_id))
+            file_id = await get_file_ids(
+                self.client,
+                int(chat_id),
+                int(message_id),
+                expose_error_details=getattr(self, "expose_locator_metadata", True),
+            )
             if not file_id:
                 if getattr(self, "expose_locator_metadata", True):
                     LOGGER.warning("Message %s not found in chat %s", message_id, chat_id)
@@ -155,7 +160,12 @@ class ByteStreamer:
                 try:
                     cache_key = (int(chat_id), int(message_id))
                     streamer_ref._file_id_cache.pop(cache_key, None)
-                    fresh = await get_file_ids(streamer_ref.client, chat_id, message_id)
+                    fresh = await get_file_ids(
+                        streamer_ref.client,
+                        chat_id,
+                        message_id,
+                        expose_error_details=expose_locator_metadata,
+                    )
                     if fresh:
                         streamer_ref._file_id_cache[cache_key] = fresh
                         loc_b[0] = await ByteStreamer._get_location(fresh)
